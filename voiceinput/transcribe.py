@@ -45,7 +45,7 @@ class GroqTranscriber:
             "https://api.groq.com/openai/v1/audio/transcriptions",
             headers={"Authorization": f"Bearer {self._api_key}"},
             files={"file": ("audio.wav", wav_bytes, "audio/wav")},
-            data={"model": "whisper-large-v3", "response_format": "text"},
+            data={"model": "whisper-large-v3", "response_format": "text", "language": "en"},
         )
         response.raise_for_status()
         text = response.text.strip()

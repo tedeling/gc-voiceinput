@@ -46,13 +46,18 @@ def find_keyboard(device_path: str = "") -> evdev.InputDevice:
 
 async def listen(
     device: evdev.InputDevice,
-    key_code: int,
+    key_codes: dict[int, bool],
     on_press: Callable[[], None],
-    on_release: Callable[[], None],
+    on_release: Callable[[bool], None],
 ) -> None:
+    """Listen for hotkeys. key_codes maps evdev key code -> auto_submit flag."""
+    active_key: int | None = None
     async for event in device.async_read_loop():
-        if event.type == ecodes.EV_KEY and event.code == key_code:
-            if event.value == 1:  # key down
-                on_press()
-            elif event.value == 0:  # key up
-                on_release()
+        if event.type != ecodes.EV_KEY or event.code not in key_codes:
+            continue
+        if event.value == 1 and active_key is None:  # key down
+            active_key = event.code
+            on_press()
+        elif event.value == 0 and event.code == active_key:  # key up
+            active_key = None
+            on_release(key_codes[event.code])

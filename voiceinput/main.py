@@ -1,6 +1,8 @@
 import asyncio
 import signal
 import sys
+import termios
+import tty
 
 from evdev import ecodes
 
@@ -24,17 +26,20 @@ def main() -> None:
         silence_threshold=cfg.silence_threshold,
     )
 
-    key_code = getattr(ecodes, cfg.hotkey, None)
-    if key_code is None:
-        print(f"Unknown key: {cfg.hotkey}", file=sys.stderr)
-        sys.exit(1)
+    key_codes = {}
+    for name in (cfg.hotkey, cfg.submit_hotkey):
+        code = getattr(ecodes, name, None)
+        if code is None:
+            print(f"Unknown key: {name}", file=sys.stderr)
+            sys.exit(1)
+        key_codes[code] = (name == cfg.submit_hotkey)
 
     device = find_keyboard(cfg.device_path)
     print(f"Using input device: {device.name} ({device.path})", flush=True)
-    print(f"Push-to-talk key: {cfg.hotkey}", flush=True)
+    print(f"Type-only: {cfg.hotkey} | Type+Submit: {cfg.submit_hotkey}", flush=True)
     router = Router(cfg.instances)
-    if cfg.tmux_target:
-        print(f"Tmux target: {cfg.tmux_target}", flush=True)
+    if cfg.target:
+        print(f"Target: {cfg.target}", flush=True)
     if cfg.instances:
         print(f"Instances: {', '.join(cfg.instances.keys())}", flush=True)
     print("Ready. Hold the hotkey and speak.", flush=True)
@@ -43,7 +48,7 @@ def main() -> None:
         print("Recording...", flush=True)
         recorder.start()
 
-    def on_release() -> None:
+    def on_release(submit: bool) -> None:
         audio = recorder.stop()
         if audio is None:
             print("(silence, skipped)", flush=True)
@@ -56,13 +61,20 @@ def main() -> None:
             return
 
         target, routed_text = router.route(text)
-        target = target or cfg.tmux_target
-        if target != cfg.tmux_target and target:
+        target = target or cfg.target
+        if target != cfg.target and target:
             print(f"> [{target}] {routed_text}", flush=True)
         else:
             routed_text = text
             print(f"> {text}", flush=True)
-        inject_text(routed_text, target)
+        inject_text(routed_text, target, submit=submit)
+
+    # Suppress terminal escape codes from F-keys by disabling input echo
+    old_tty = None
+    if sys.stdin.isatty():
+        fd = sys.stdin.fileno()
+        old_tty = termios.tcgetattr(fd)
+        tty.setcbreak(fd)
 
     loop = asyncio.new_event_loop()
 
@@ -74,11 +86,13 @@ def main() -> None:
     loop.add_signal_handler(signal.SIGTERM, shutdown)
 
     try:
-        loop.run_until_complete(listen(device, key_code, on_press, on_release))
+        loop.run_until_complete(listen(device, key_codes, on_press, on_release))
     except asyncio.CancelledError:
         pass
     finally:
         device.close()
+        if old_tty is not None:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_tty)
         print("\nStopped.", flush=True)
 
 
